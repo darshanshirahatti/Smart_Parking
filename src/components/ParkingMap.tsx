@@ -61,7 +61,7 @@ export function ParkingMap() {
     }
   };
 
-  const formatTimeAMPM = (date: Date | undefined): string => {
+  const formatTimeAMPM = (date: Date | null | undefined): string => {
     if (!date) return "";
     return date.toLocaleTimeString("en-US", {
       hour: "2-digit",

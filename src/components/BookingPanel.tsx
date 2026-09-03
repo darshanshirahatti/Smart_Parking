@@ -136,7 +136,7 @@ export function BookingPanel() {
                     </Button>
                   </>
                 ) : (
-                  <Button onClick={() => completeParking(booking.id)} className="flex-1 bg-blue-500 hover:bg-blue-600">
+                  <Button onClick={() => completeParking(booking.id, "cash")} className="flex-1 bg-blue-500 hover:bg-blue-600">
                     <IndianRupee className="mr-2 h-4 w-4" />
                     Pay & Exit
                   </Button>
