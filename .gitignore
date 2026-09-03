@@ -27,5 +27,12 @@ Thumbs.db
 # Coverage / testing
 coverage/
 
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
 # Misc
 *.log

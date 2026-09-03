@@ -2,6 +2,8 @@
 
 SmartPark is a smart city parking management dashboard built with React, TypeScript, Vite, and Tailwind CSS. It provides a parking overview, live availability monitoring, booking flow, and admin controls in a single responsive interface.
 
+Live repository: [github.com/darshanshirahatti/Smart_Parking](https://github.com/darshanshirahatti/Smart_Parking)
+
 ## Features
 
 - Real-time parking dashboard with status overview
@@ -41,22 +43,36 @@ smart-parking/
 └── .gitignore
 ```
 
+## Requirements
+
+- Node.js 18 or newer
+- npm 9 or newer
+
 ## Getting Started
 
-1. Clone the repository
-2. Install dependencies:
+Clone the repository and install its dependencies:
 
 ```bash
+git clone https://github.com/darshanshirahatti/Smart_Parking.git
+cd Smart_Parking
 npm install
 ```
 
-3. Start the development server:
+Start the development server:
 
 ```bash
 npm run dev
 ```
 
-4. Open the local URL shown in the terminal to view the app.
+Open the local URL shown in the terminal to view the app.
+
+## Available Scripts
+
+| Command | Description |
+| --- | --- |
+| `npm run dev` | Start the Vite development server |
+| `npm run build` | Type-check and create a production build |
+| `npm run preview` | Preview the production build locally |
 
 ## Optional Local Bridge
 
@@ -74,17 +90,16 @@ npm run build
 
 This creates a production-ready build in the `dist` folder.
 
-## GitHub Push
+## Contributing
 
-> Warning: before running `git add .`, make sure `.gitignore` is saved and includes folders like `node_modules` and `dist`. If Git still warns about files being untracked or ignored, check that the files are not already being tracked and run the commands again.
+Create a branch for your change, run the production build, and open a pull request:
 
 ```bash
-git init
+git checkout -b feature/your-change
+npm run build
 git add .
-git commit -m "Initial commit"
-git branch -M main
-git remote add origin https://github.com/<your-username>/<your-repo>.git
-git push -u origin main
+git commit -m "Describe your change"
+git push -u origin feature/your-change
 ```
 
 ## License
