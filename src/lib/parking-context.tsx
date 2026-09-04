@@ -77,7 +77,7 @@ const THINGSBOARD_DEVICE_ID = "9ab9fab0-a512-11f1-9b46-e7fbeb690c95";
 // ends up inside the built JS bundle once deployed — env vars keep it out of
 // your GitHub repo, not out of the deployed app. Fine for a class demo; never
 // reuse this account/key for anything beyond it.
-const THINGSBOARD_API_KEY = import.meta.env.VITE_THINGSBOARD_API_KEY || "";
+const THINGSBOARD_API_KEY = "tb_CQSS_e4NZoaBj7l3OTYnnSpOGxiIbdpZy8PIIG3oMNL9WlAEk-nT5ZDTIwIwDWWvu986-dWCzHnY_cHdiB3okg";
 
 
 // Physical model has exactly 4 bays. Only A01 has a real sensor right now —
