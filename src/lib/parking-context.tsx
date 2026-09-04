@@ -71,11 +71,14 @@ const ParkingContext = createContext<ParkingContextType | undefined>(undefined);
 // ThingsBoard Cloud Integration Parameters
 const THINGSBOARD_HOST = "https://thingsboard.cloud";
 const THINGSBOARD_DEVICE_ID = "9ab9fab0-a512-11f1-9b46-e7fbeb690c95";
-// Tenant-admin API key (Account > Security > API keys > Generate).
-// SECURITY NOTE: this key carries full tenant-admin permissions and is
-// visible to anyone who views this app's JS bundle. Fine for a class demo;
-// never reuse this account/key for anything beyond it.
-const THINGSBOARD_API_KEY = "tb_CQSS_e4NZoaBj7l3OTYnnSpOGxiIbdpZy8PIIG3oMNL9WlAEk-nT5ZDTIwIwDWWvu986-dWCzHnY_cHdiB3okg";
+// Tenant-admin API key, read from an environment variable (see .env.example)
+// instead of being hardcoded, so it never lands in git history or a public repo.
+// SECURITY NOTE: this key still carries full tenant-admin permissions and still
+// ends up inside the built JS bundle once deployed — env vars keep it out of
+// your GitHub repo, not out of the deployed app. Fine for a class demo; never
+// reuse this account/key for anything beyond it.
+const THINGSBOARD_API_KEY = import.meta.env.VITE_THINGSBOARD_API_KEY || "";
+
 
 // Physical model has exactly 4 bays. Only A01 has a real sensor right now —
 // all four start "available" with no mock vehicles/bookings, so every number
@@ -121,12 +124,21 @@ export function ParkingProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(interval);
   }, [gracePeriod]);
 
-  // Real-time Hardware Telemetry Integration with ThingsBoard
+  // Real-time Hardware Telemetry Integration with ThingsBoard.
+  // Maps ThingsBoard telemetry keys to dashboard slots — add an entry here
+  // for each new sensor (e.g. { key: "occupied3", slotNumber: "A03" }).
+  const SENSOR_TO_SLOT = [
+    { key: "occupied", slotNumber: "A01" },
+    { key: "occupied2", slotNumber: "A02" },
+    { key: "occupied3", slotNumber: "A03" },
+  ];
+
   useEffect(() => {
     const fetchHardwareStatus = async () => {
       try {
+        const keys = SENSOR_TO_SLOT.map((s) => s.key).join(",");
         const response = await fetch(
-          `${THINGSBOARD_HOST}/api/plugins/telemetry/DEVICE/${THINGSBOARD_DEVICE_ID}/values/timeseries?keys=occupied,distance`,
+          `${THINGSBOARD_HOST}/api/plugins/telemetry/DEVICE/${THINGSBOARD_DEVICE_ID}/values/timeseries?keys=${keys}`,
           { headers: { "X-Authorization": `ApiKey ${THINGSBOARD_API_KEY}` } }
         );
 
@@ -140,30 +152,30 @@ export function ParkingProvider({ children }: { children: ReactNode }) {
         const data = await response.json();
         console.log("[SmartPark] Raw telemetry response:", JSON.stringify(data));
 
-        const isOccupied = data.occupied?.[0]?.value === "true" || data.occupied?.[0]?.value === true;
-        console.log("[SmartPark] Parsed isOccupied =", isOccupied);
-
-        // Synchronize hardware telemetry state with slot A01
+        // Synchronize hardware telemetry state with each mapped slot
         setSlots((prevSlots) => {
-          const a01Before = prevSlots.find((s) => s.slotNumber === "A01");
-          console.log("[SmartPark] A01 status before update:", a01Before?.status);
-
           const updated = prevSlots.map((slot) => {
-            if (slot.slotNumber === "A01") {
-              if (slot.status === "reserved" && !isOccupied) return slot;
+            const mapping = SENSOR_TO_SLOT.find((s) => s.slotNumber === slot.slotNumber);
+            if (!mapping) return slot;
 
-              const now = new Date();
-              return {
-                ...slot,
-                status: isOccupied ? ("occupied" as SlotStatus) : ("available" as SlotStatus),
-                entryTime: isOccupied ? slot.entryTime || now : undefined,
-                vehicleNumber: isOccupied ? slot.vehicleNumber || "HARDWARE_VEHICLE" : undefined,
-              };
-            }
-            return slot;
+            const rawValue = data[mapping.key]?.[0]?.value;
+            const isOccupied = rawValue === "true" || rawValue === true;
+
+            if (slot.status === "reserved" && !isOccupied) return slot;
+
+            const now = new Date();
+            return {
+              ...slot,
+              status: isOccupied ? ("occupied" as SlotStatus) : ("available" as SlotStatus),
+              entryTime: isOccupied ? slot.entryTime || now : undefined,
+              vehicleNumber: isOccupied ? slot.vehicleNumber || "HARDWARE_VEHICLE" : undefined,
+            };
           });
 
-          console.log("[SmartPark] A01 status after update:", updated.find((s) => s.slotNumber === "A01")?.status);
+          console.log(
+            "[SmartPark] Slot statuses after update:",
+            SENSOR_TO_SLOT.map((s) => `${s.slotNumber}=${updated.find((u) => u.slotNumber === s.slotNumber)?.status}`).join(", ")
+          );
           return updated;
         });
       } catch (error) {
