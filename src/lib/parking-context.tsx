@@ -137,12 +137,15 @@ export function ParkingProvider({ children }: { children: ReactNode }) {
     const fetchHardwareStatus = async () => {
       try {
         const keys = SENSOR_TO_SLOT.map((s) => s.key).join(",");
-        const response = await fetch(
-          `${THINGSBOARD_HOST}/api/plugins/telemetry/DEVICE/${THINGSBOARD_DEVICE_ID}/values/timeseries?keys=${keys}`,
-          { headers: { "X-Authorization": `ApiKey ${THINGSBOARD_API_KEY}` } }
-        );
+        const url = `${THINGSBOARD_HOST}/api/plugins/telemetry/DEVICE/${THINGSBOARD_DEVICE_ID}/values/timeseries?keys=${keys}`;
+        console.log("[SmartPark] Fetching URL:", url);
+        console.log("[SmartPark] API key loaded?", THINGSBOARD_API_KEY ? `yes, length ${THINGSBOARD_API_KEY.length}` : "NO — empty/undefined!");
 
-        console.log("[SmartPark] Telemetry fetch status:", response.status);
+        const response = await fetch(url, {
+          headers: { "X-Authorization": `ApiKey ${THINGSBOARD_API_KEY}` },
+        });
+
+        console.log("[SmartPark] Telemetry fetch status:", response.status, "— actual response.url:", response.url);
 
         if (!response.ok) {
           console.error("[SmartPark] Telemetry fetch not OK:", response.status, "— check THINGSBOARD_API_KEY is valid and not expired/revoked");
