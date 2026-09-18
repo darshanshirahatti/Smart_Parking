@@ -8,6 +8,13 @@ node_modules/
 # Environment files
 .env*
 !.env.example
+*.local
+
+# Local Python tooling
+.python-version
+*.py[cod]
+*.pyo
+*.pyd
 
 # Logs
 npm-debug.log*
@@ -31,7 +38,6 @@ coverage/
 
 # Python cache and virtual environments
 __pycache__/
-*.py[cod]
 .venv/
 venv/
 env/

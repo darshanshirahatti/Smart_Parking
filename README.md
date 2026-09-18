@@ -68,15 +68,11 @@ Open the local URL shown in the terminal to view the app.
 
 ### ThingsBoard Configuration
 
-Telemetry integration is optional. To enable it, copy the example environment file and add a ThingsBoard API key:
+Telemetry integration is optional. The dashboard currently reads the ThingsBoard device and telemetry mapping configured in `src/lib/parking-context.tsx`. It reads `occupied`, `occupied2`, and `occupied3` for slots `A01`, `A02`, and `A03`; `A04` remains available for reservations until another sensor is mapped.
 
-```bash
-copy .env.example .env
-```
+The frontend calls ThingsBoard directly from the browser, so any client-side API key is visible to users and in the production bundle. Use a restricted, demo-only key for local or classroom demonstrations. For a real deployment, move the ThingsBoard request behind a server-side proxy and keep the credential in that server's environment. Never commit `.env` files, API keys, device tokens, or other credentials.
 
-Then set `VITE_THINGSBOARD_API_KEY` in `.env` and restart the development server. The current sensor mapping reads `occupied`, `occupied2`, and `occupied3` for slots `A01`, `A02`, and `A03`; `A04` remains available for reservations until another sensor is mapped.
-
-Never commit `.env` or any other file containing a real API key. Vite embeds `VITE_*` values in the browser bundle, so use a restricted, demo-only key for this frontend integration.
+If you add environment-based configuration later, use a local file such as `.env.local`; local environment files are ignored by Git. Add only safe placeholder names and example values to a committed `.env.example` file.
 
 ## Available Scripts
 
@@ -93,6 +89,8 @@ This project also includes a Python bridge file for local service simulation. Ru
 ```bash
 python bridge.py
 ```
+
+The bridge expects the Arduino on `COM5` at `9600` baud and forwards telemetry to ThingsBoard. Update its local port and access token before running it, and do not commit real device tokens.
 
 ## Production Build
 
