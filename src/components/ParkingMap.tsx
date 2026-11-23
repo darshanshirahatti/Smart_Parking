@@ -25,7 +25,14 @@ const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
 ];
 
 export function ParkingMap() {
-  const { slots, hourlyRate, reserveSlot, startParking } = useParking();
+  const {
+    slots,
+    hourlyRate,
+    reserveSlot,
+    startParking,
+    reservationServiceOnline,
+    reservationGraceMinutes,
+  } = useParking();
   const [selectedSlot, setSelectedSlot] = useState<ParkingSlot | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [filter, setFilter] = useState<"all" | "available" | "occupied" | "reserved">("all");
@@ -36,8 +43,8 @@ export function ParkingMap() {
   const [bookingMessage, setBookingMessage] = useState<string | null>(null);
   const [showPayment, setShowPayment] = useState(false);
   const [paymentSuccess, setPaymentSuccess] = useState<{ bookingId: string; transactionId: string } | null>(null);
-  const [countdown, setCountdown] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isSavingReservation, setIsSavingReservation] = useState(false);
 
   const filteredSlots = slots.filter((slot) => {
     const matchesSearch = slot.slotNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -49,6 +56,7 @@ export function ParkingMap() {
   const rows = ["A", "B", "C", "D", "E", "F"];
 
   const getSlotColor = (status: string) => {
+    if (!reservationServiceOnline) return "bg-slate-400 cursor-not-allowed";
     switch (status) {
       case "available":
         return "bg-emerald-500 hover:bg-emerald-600";
@@ -63,39 +71,34 @@ export function ParkingMap() {
 
   const formatTimeAMPM = (date: Date | null | undefined): string => {
     if (!date) return "";
-    return date.toLocaleTimeString("en-US", {
+    return new Intl.DateTimeFormat("en-IN", {
+      timeZone: "Asia/Kolkata",
       hour: "2-digit",
       minute: "2-digit",
       hour12: true,
-    });
+      day: "2-digit",
+      month: "short",
+    }).format(date);
   };
 
-  const parseTimeToDate = (timeStr: string): Date | null => {
-    if (!timeStr) return null;
-    const [hours, minutes] = timeStr.split(":").map(Number);
-    if (isNaN(hours) || isNaN(minutes)) return null;
-
-    const now = new Date();
-    const date = new Date(now);
-    date.setHours(hours, minutes, 0, 0);
-
-    // Handle midnight crossing: if selected time is earlier than now, assume next day
-    if (date.getTime() < now.getTime()) {
-      date.setDate(date.getDate() + 1);
-    }
-
-    return date;
+  const parseIndiaDateTime = (value: string): Date | null => {
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return null;
+    const date = new Date(`${value}:00+05:30`);
+    return Number.isNaN(date.getTime()) ? null : date;
   };
 
-  const getCountdown = (arrival: Date) => {
-    const now = new Date();
-    const diff = arrival.getTime() - now.getTime();
-    if (diff <= 0) return null;
-    const totalSeconds = Math.floor(diff / 1000);
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  const getIndiaDateTimeInput = (date: Date): string => {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(date);
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}`;
   };
 
   const handleSlotClick = (slot: ParkingSlot) => {
@@ -106,16 +109,19 @@ export function ParkingMap() {
     setArrivalTime("");
     setVehicleNumber("");
     setError(null);
-    setCountdown(null);
   };
 
   const handleReserveClick = () => {
+    if (!reservationServiceOnline) {
+      setError("Reservation service is offline. Slots cannot be safely reserved right now.");
+      return;
+    }
     if (!selectedSlot || !vehicleNumber.trim()) {
       setBookingMessage("Please enter vehicle number");
       return;
     }
 
-    const arrival = parseTimeToDate(arrivalTime);
+    const arrival = parseIndiaDateTime(arrivalTime);
     if (!arrival) {
       setBookingMessage("Please select arrival time");
       return;
@@ -129,58 +135,68 @@ export function ParkingMap() {
       return;
     }
 
-    if (diffMinutes > 15) {
-      const opensAt = new Date(arrival.getTime() - 15 * 60000);
-      setBookingMessage(`Reservation is available only within 15 minutes before your arrival time. Reservation opens at ${formatTimeAMPM(opensAt)}.`);
-      setCountdown(getCountdown(opensAt));
-      return;
-    }
-
     setBookingMessage(null);
-    setCountdown(null);
     setShowPayment(true);
   };
 
-  const handlePayment = () => {
+  const handlePayment = async () => {
     if (!selectedSlot || !vehicleNumber.trim()) return;
-    const arrival = parseTimeToDate(arrivalTime);
+    const arrival = parseIndiaDateTime(arrivalTime);
     if (!arrival) return;
 
-    const result = reserveSlot(selectedSlot.id, arrival, vehicleNumber.trim(), duration, paymentMethod);
-    if (result.success && result.booking) {
-      setPaymentSuccess({ bookingId: result.booking.id, transactionId: `TXN${Math.floor(Math.random() * 1000000000)}` });
-      setShowPayment(false);
-      setSelectedSlot(null);
-      setArrivalTime("");
-      setVehicleNumber("");
-      setDuration(2);
-      setPaymentMethod("upi");
-    } else {
-      setError(result.message);
-      setShowPayment(false);
+    try {
+      setIsSavingReservation(true);
+      const result = await reserveSlot(selectedSlot.id, arrival, vehicleNumber.trim(), duration, paymentMethod);
+      if (result.success && result.booking) {
+        setPaymentSuccess({ bookingId: result.booking.id, transactionId: `TXN${Math.floor(Math.random() * 1000000000)}` });
+        setShowPayment(false);
+        setSelectedSlot(null);
+        setArrivalTime("");
+        setVehicleNumber("");
+        setDuration(2);
+        setPaymentMethod("upi");
+      } else {
+        setError(result.message);
+        setShowPayment(false);
+      }
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not save the reservation.");
+    } finally {
+      setIsSavingReservation(false);
     }
   };
 
-  const handleParkNow = () => {
+  const handleParkNow = async () => {
+    if (!reservationServiceOnline) {
+      setError("Reservation service is offline. Slots cannot be safely reserved right now.");
+      return;
+    }
     if (!selectedSlot || !vehicleNumber.trim()) {
       setBookingMessage("Please enter vehicle number");
       return;
     }
 
     const now = new Date();
-    const result = reserveSlot(selectedSlot.id, now, vehicleNumber.trim(), duration, "cash");
-    if (result.success && result.booking) {
-      const parkResult = startParking(result.booking.id);
-      if (parkResult.success) {
-        setSelectedSlot(null);
-        setVehicleNumber("");
-        setDuration(2);
-        setBookingMessage("Vehicle parked successfully!");
+    try {
+      setIsSavingReservation(true);
+      const result = await reserveSlot(selectedSlot.id, now, vehicleNumber.trim(), duration, "cash");
+      if (result.success && result.booking) {
+        const parkResult = startParking(result.booking.id);
+        if (parkResult.success) {
+          setSelectedSlot(null);
+          setVehicleNumber("");
+          setDuration(2);
+          setBookingMessage("Vehicle parked successfully!");
+        } else {
+          setError(parkResult.message);
+        }
       } else {
-        setError(parkResult.message);
+        setError(result.message);
       }
-    } else {
-      setError(result.message);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not start parking.");
+    } finally {
+      setIsSavingReservation(false);
     }
   };
 
@@ -200,12 +216,12 @@ export function ParkingMap() {
             <p className="text-sm font-medium text-amber-800">This parking slot is already reserved.</p>
             <div className="mt-3 space-y-2 text-sm">
               <p className="flex justify-between">
-                <span className="text-slate-500">Reserved Until:</span>
-                <span className="font-medium">{formatTimeAMPM(slot.arrivalTime)}</span>
+                <span className="text-slate-500">Expected Exit:</span>
+                <span className="font-medium">{formatTimeAMPM(slot.expectedExitTime)} IST</span>
               </p>
               <p className="flex justify-between">
                 <span className="text-slate-500">Available After:</span>
-                <span className="font-medium">{slot.arrivalTime ? formatTimeAMPM(new Date(slot.arrivalTime.getTime() + 10 * 60000)) : ""}</span>
+                <span className="font-medium">{slot.expectedExitTime ? `${formatTimeAMPM(new Date(slot.expectedExitTime.getTime() + reservationGraceMinutes * 60000))} IST` : ""}</span>
               </p>
             </div>
           </div>
@@ -266,19 +282,21 @@ export function ParkingMap() {
           <div className="relative">
             <Input
               id="arrival"
-              type="time"
+              type="datetime-local"
               value={arrivalTime}
+              min={getIndiaDateTimeInput(new Date())}
+              max={getIndiaDateTimeInput(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000))}
               onChange={(e) => {
                 setArrivalTime(e.target.value);
                 setBookingMessage(null);
-                setCountdown(null);
+                setError(null);
               }}
               className="pl-9"
             />
             <Clock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           </div>
           <p className="text-xs text-slate-500">
-            {arrivalTime ? `Selected: ${formatTimeAMPM(parseTimeToDate(arrivalTime))}` : "Select time (e.g. 07:00 PM)"}
+            {arrivalTime ? `Selected (IST): ${formatTimeAMPM(parseIndiaDateTime(arrivalTime))}` : "Select arrival date and time (India Standard Time)"}
           </p>
         </div>
 
@@ -298,13 +316,6 @@ export function ParkingMap() {
           </div>
         </div>
 
-        {countdown && (
-          <div className="rounded-lg bg-amber-50 p-4 text-center">
-            <p className="text-sm font-medium text-amber-800">Reservation opens in</p>
-            <p className="font-mono text-2xl font-bold text-amber-600">{countdown}</p>
-          </div>
-        )}
-
         {bookingMessage && (
           <p className="text-sm text-amber-600">{bookingMessage}</p>
         )}
@@ -320,8 +331,8 @@ export function ParkingMap() {
           <Button onClick={handleReserveClick} className="flex-1 bg-amber-500 hover:bg-amber-600">
             Reserve Slot
           </Button>
-          <Button onClick={handleParkNow} className="flex-1 bg-emerald-500 hover:bg-emerald-600">
-            Park Now
+          <Button onClick={handleParkNow} disabled={isSavingReservation} className="flex-1 bg-emerald-500 hover:bg-emerald-600">
+            {isSavingReservation ? "Saving..." : "Park Now"}
           </Button>
         </div>
       </div>
@@ -345,6 +356,12 @@ export function ParkingMap() {
           />
         </div>
       </div>
+
+      {!reservationServiceOnline && (
+        <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+          Connecting to the shared reservation service. Slot availability is unavailable until it responds.
+        </p>
+      )}
 
       <div className="flex flex-wrap gap-2">
         {(["all", "available", "occupied", "reserved"] as const).map((f) => (
@@ -374,11 +391,16 @@ export function ParkingMap() {
                       <DialogTrigger asChild>
                         <button
                           onClick={() => handleSlotClick(slot)}
-                          className={`flex h-16 w-16 flex-col items-center justify-center rounded-lg text-white shadow-sm transition-all hover:scale-105 ${getSlotColor(slot.status)}`}
+                          disabled={!reservationServiceOnline}
+                          aria-label={`Slot ${slot.slotNumber}: ${!reservationServiceOnline ? "waiting for service" : slot.status}`}
+                          className={`flex h-16 w-16 flex-col items-center justify-center rounded-lg text-white shadow-sm transition-all enabled:hover:scale-105 ${getSlotColor(slot.status)}`}
                         >
+                          {slot.status === "occupied" && (
+                            <Car className="h-5 w-5" aria-hidden="true" />
+                          )}
                           <span className="text-sm font-bold">{slot.slotNumber}</span>
                           <span className="text-[10px] opacity-80">
-                            {slot.status === "available" ? "FREE" : slot.status === "occupied" ? "FULL" : "RESERVED"}
+                            {!reservationServiceOnline ? "WAIT" : slot.status === "available" ? "FREE" : slot.status === "occupied" ? "FULL" : "RESERVED"}
                           </span>
                         </button>
                       </DialogTrigger>
@@ -397,7 +419,7 @@ export function ParkingMap() {
                             <div className="space-y-2 rounded-lg bg-slate-50 p-4">
                               <p className="text-sm"><span className="font-medium">Slot:</span> {slot.slotNumber}</p>
                               <p className="text-sm"><span className="font-medium">Vehicle:</span> {vehicleNumber}</p>
-                              <p className="text-sm"><span className="font-medium">Arrival:</span> {formatTimeAMPM(parseTimeToDate(arrivalTime))}</p>
+                              <p className="text-sm"><span className="font-medium">Arrival:</span> {formatTimeAMPM(parseIndiaDateTime(arrivalTime))} IST</p>
                               <p className="text-sm"><span className="font-medium">Estimated Fee:</span> ₹{estimatedFee}</p>
                               <p className="text-sm"><span className="font-medium">Advance Paid:</span> ₹{advanceAmount}</p>
                               <p className="text-sm"><span className="font-medium">Remaining:</span> ₹{remainingAmount}</p>
@@ -411,7 +433,7 @@ export function ParkingMap() {
                               <div className="space-y-2 text-sm">
                                 <p className="flex justify-between"><span className="text-slate-500">Slot:</span> <span className="font-medium">{slot.slotNumber}</span></p>
                                 <p className="flex justify-between"><span className="text-slate-500">Vehicle:</span> <span className="font-medium">{vehicleNumber}</span></p>
-                                <p className="flex justify-between"><span className="text-slate-500">Arrival:</span> <span className="font-medium">{formatTimeAMPM(parseTimeToDate(arrivalTime))}</span></p>
+                                <p className="flex justify-between"><span className="text-slate-500">Arrival:</span> <span className="font-medium">{formatTimeAMPM(parseIndiaDateTime(arrivalTime))} IST</span></p>
                                 <p className="flex justify-between"><span className="text-slate-500">Duration:</span> <span className="font-medium">{duration} hours</span></p>
                                 <p className="flex justify-between"><span className="text-slate-500">Rate:</span> <span className="font-medium">₹{hourlyRate}/hour</span></p>
                                 <p className="flex justify-between border-t pt-2"><span className="text-slate-500">Estimated Fee:</span> <span className="font-bold">₹{estimatedFee}</span></p>
@@ -436,8 +458,8 @@ export function ParkingMap() {
                               </div>
                             </div>
 
-                            <Button onClick={handlePayment} className="w-full bg-emerald-500 hover:bg-emerald-600">
-                              Pay ₹{advanceAmount}
+                            <Button onClick={handlePayment} disabled={isSavingReservation} className="w-full bg-emerald-500 hover:bg-emerald-600">
+                              {isSavingReservation ? "Saving reservation..." : `Pay ₹${advanceAmount}`}
                             </Button>
                           </div>
                         ) : (

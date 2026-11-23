@@ -8,6 +8,7 @@ import { Timer, IndianRupee, CheckCircle2, XCircle } from "lucide-react";
 export function BookingPanel() {
   const { bookings, slots, hourlyRate, startParking, completeParking, cancelReservation, billingMethod } = useParking();
   const [now, setNow] = useState(new Date());
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     const interval = setInterval(() => setNow(new Date()), 1000);
@@ -34,12 +35,32 @@ export function BookingPanel() {
     return Math.round(durationHours * hourlyRate * 100) / 100;
   };
 
+  const formatIst = (date: Date | undefined) => {
+    if (!date) return "";
+    return new Intl.DateTimeFormat("en-IN", {
+      timeZone: "Asia/Kolkata",
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(date);
+  };
+
+  const runBookingAction = async (action: () => Promise<unknown>) => {
+    setActionError(null);
+    try {
+      await action();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "The booking action failed.");
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-2xl font-bold text-slate-900">My Booking</h2>
         <p className="text-sm text-slate-500">Manage your current parking sessions</p>
       </div>
+
+      {actionError && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{actionError}</p>}
 
       {activeBookings.length === 0 && (
         <Card className="border-dashed border-2 border-slate-300 bg-slate-50">
@@ -76,17 +97,17 @@ export function BookingPanel() {
                 </div>
                 <div className="space-y-2 rounded-lg bg-slate-50 p-4">
                   <p className="text-sm text-slate-500">Arrival Time</p>
-                  <p className="font-semibold text-slate-900">{booking.arrivalTime.toLocaleTimeString()}</p>
+                  <p className="font-semibold text-slate-900">{formatIst(booking.arrivalTime)} IST</p>
                 </div>
                 {booking.entryTime && (
                   <div className="space-y-2 rounded-lg bg-slate-50 p-4">
                     <p className="text-sm text-slate-500">Entry Time</p>
-                    <p className="font-semibold text-slate-900">{booking.entryTime.toLocaleTimeString()}</p>
+                    <p className="font-semibold text-slate-900">{formatIst(booking.entryTime)} IST</p>
                   </div>
                 )}
                 <div className="space-y-2 rounded-lg bg-slate-50 p-4">
                   <p className="text-sm text-slate-500">Expected Exit</p>
-                  <p className="font-semibold text-slate-900">{booking.expectedExitTime?.toLocaleTimeString()}</p>
+                  <p className="font-semibold text-slate-900">{formatIst(booking.expectedExitTime)} IST</p>
                 </div>
               </div>
 
@@ -130,13 +151,13 @@ export function BookingPanel() {
                       <CheckCircle2 className="mr-2 h-4 w-4" />
                       Vehicle Arrived
                     </Button>
-                    <Button onClick={() => cancelReservation(booking.id)} variant="outline" className="flex-1 text-red-600">
+                    <Button onClick={() => void runBookingAction(() => cancelReservation(booking.id))} variant="outline" className="flex-1 text-red-600">
                       <XCircle className="mr-2 h-4 w-4" />
                       Cancel Reservation
                     </Button>
                   </>
                 ) : (
-                  <Button onClick={() => completeParking(booking.id, "cash")} className="flex-1 bg-blue-500 hover:bg-blue-600">
+                  <Button onClick={() => void runBookingAction(() => completeParking(booking.id, "cash"))} className="flex-1 bg-blue-500 hover:bg-blue-600">
                     <IndianRupee className="mr-2 h-4 w-4" />
                     Pay & Exit
                   </Button>

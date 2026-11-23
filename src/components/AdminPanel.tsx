@@ -14,10 +14,9 @@ export function AdminPanel() {
     bookings,
     payments,
     hourlyRate,
-    gracePeriod,
     billingMethod,
     setHourlyRate,
-    setGracePeriod,
+    reservationGraceMinutes,
     setBillingMethod,
     addSlot,
     removeSlot,
@@ -26,7 +25,7 @@ export function AdminPanel() {
 
   const [newSlotNumber, setNewSlotNumber] = useState("");
   const [newRate, setNewRate] = useState(hourlyRate.toString());
-  const [newGracePeriod, setNewGracePeriod] = useState(gracePeriod.toString());
+  const [reservationError, setReservationError] = useState<string | null>(null);
 
   const available = slots.filter((s) => s.status === "available").length;
   const occupied = slots.filter((s) => s.status === "occupied").length;
@@ -47,12 +46,12 @@ export function AdminPanel() {
     }
   };
 
-  const handleUpdateGracePeriod = () => {
-    const period = parseInt(newGracePeriod);
-    if (!isNaN(period) && period > 0) {
-      setGracePeriod(period);
-    }
-  };
+  const formatIst = (date: Date) =>
+    new Intl.DateTimeFormat("en-IN", {
+      timeZone: "Asia/Kolkata",
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(date);
 
   return (
     <div className="space-y-6">
@@ -111,16 +110,10 @@ export function AdminPanel() {
             </div>
 
             <div className="space-y-2">
-              <Label>Reservation Grace Period (minutes)</Label>
-              <div className="flex gap-2">
-                <Input
-                  type="number"
-                  value={newGracePeriod}
-                  onChange={(e) => setNewGracePeriod(e.target.value)}
-                  min="1"
-                />
-                <Button onClick={handleUpdateGracePeriod}>Update</Button>
-              </div>
+              <Label>Reservation Grace Period</Label>
+              <p className="text-sm text-slate-500">
+                {reservationGraceMinutes} minutes, configured on the reservation API server.
+              </p>
             </div>
 
             <div className="space-y-2">
@@ -195,18 +188,26 @@ export function AdminPanel() {
             <CardTitle className="text-lg">Active Reservations</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
+            {reservationError && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{reservationError}</p>}
             {bookings
               .filter((b) => b.status === "reserved")
               .map((booking) => (
                 <div key={booking.id} className="flex items-center justify-between rounded-lg bg-slate-50 p-3">
                   <div>
                     <p className="font-medium text-slate-900">Slot {booking.slotNumber} · {booking.vehicleNumber}</p>
-                    <p className="text-xs text-slate-500">Arrival: {booking.arrivalTime.toLocaleTimeString()}</p>
+                    <p className="text-xs text-slate-500">Arrival: {formatIst(booking.arrivalTime)} IST</p>
                   </div>
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => cancelReservation(booking.id)}
+                    onClick={async () => {
+                      setReservationError(null);
+                      try {
+                        await cancelReservation(booking.id);
+                      } catch (error) {
+                        setReservationError(error instanceof Error ? error.message : "Could not cancel reservation.");
+                      }
+                    }}
                     className="text-red-600"
                   >
                     Cancel

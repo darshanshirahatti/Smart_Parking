@@ -1,4 +1,11 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, useRef, ReactNode } from "react";
+import {
+  cancelSharedReservation,
+  createSharedReservation,
+  getReservationOwnerToken,
+  getSharedReservations,
+  SharedReservation,
+} from "@/lib/reservations-api";
 
 export type SlotStatus = "available" | "occupied" | "reserved";
 export type PaymentMethod = "upi" | "card" | "netbanking" | "wallet" | "cash";
@@ -48,17 +55,17 @@ export interface Payment {
 
 interface ParkingContextType {
   slots: ParkingSlot[];
+  reservationServiceOnline: boolean;
   bookings: Booking[];
   payments: Payment[];
   hourlyRate: number;
-  gracePeriod: number;
+  reservationGraceMinutes: number;
   billingMethod: "exact" | "rounded";
-  reserveSlot: (slotId: string, arrivalTime: Date, vehicleNumber: string, durationHours: number, paymentMethod: PaymentMethod) => { success: boolean; message: string; booking?: Booking };
+  reserveSlot: (slotId: string, arrivalTime: Date, vehicleNumber: string, durationHours: number, paymentMethod: PaymentMethod) => Promise<{ success: boolean; message: string; booking?: Booking }>;
   startParking: (bookingId: string) => { success: boolean; message: string };
-  completeParking: (bookingId: string, paymentMethod: PaymentMethod) => Payment;
-  cancelReservation: (bookingId: string) => void;
+  completeParking: (bookingId: string, paymentMethod: PaymentMethod) => Promise<Payment>;
+  cancelReservation: (bookingId: string) => Promise<void>;
   setHourlyRate: (rate: number) => void;
-  setGracePeriod: (minutes: number) => void;
   setBillingMethod: (method: "exact" | "rounded") => void;
   addSlot: (slotNumber: string) => void;
   removeSlot: (slotId: string) => void;
@@ -68,16 +75,32 @@ interface ParkingContextType {
 
 const ParkingContext = createContext<ParkingContextType | undefined>(undefined);
 
-// ThingsBoard Cloud Integration Parameters
-const THINGSBOARD_HOST = "https://thingsboard.cloud";
-const THINGSBOARD_DEVICE_ID = "9ab9fab0-a512-11f1-9b46-e7fbeb690c95";
-// Tenant-admin API key, read from an environment variable (see .env.example)
-// instead of being hardcoded, so it never lands in git history or a public repo.
-// SECURITY NOTE: this key still carries full tenant-admin permissions and still
-// ends up inside the built JS bundle once deployed — env vars keep it out of
-// your GitHub repo, not out of the deployed app. Fine for a class demo; never
-// reuse this account/key for anything beyond it.
-const THINGSBOARD_API_KEY = "tb_CQSS_e4NZoaBj7l3OTYnnSpOGxiIbdpZy8PIIG3oMNL9WlAEk-nT5ZDTIwIwDWWvu986-dWCzHnY_cHdiB3okg";
+const THINGSBOARD_HOST = (
+  import.meta.env.VITE_THINGSBOARD_HOST || "https://thingsboard.cloud"
+).replace(/\/+$/, "");
+const THINGSBOARD_DEVICE_ID =
+  import.meta.env.VITE_THINGSBOARD_DEVICE_ID ||
+  "9ab9fab0-a512-11f1-9b46-e7fbeb690c95";
+const THINGSBOARD_API_KEY = import.meta.env.VITE_THINGSBOARD_API_KEY;
+const TELEMETRY_POLL_INTERVAL_MS = 2000;
+const TELEMETRY_REQUEST_TIMEOUT_MS = 5000;
+
+const SENSOR_TO_SLOT = [
+  { key: "occupied", slotNumber: "A01" },
+  { key: "occupied2", slotNumber: "A02" },
+  { key: "occupied3", slotNumber: "A03" },
+];
+
+const parseOccupancy = (value: unknown): boolean | undefined => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number" && (value === 0 || value === 1)) return value === 1;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true" || normalized === "1") return true;
+    if (normalized === "false" || normalized === "0") return false;
+  }
+  return undefined;
+};
 
 
 // Physical model has exactly 4 bays. Only A01 has a real sensor right now —
@@ -98,104 +121,174 @@ export function ParkingProvider({ children }: { children: ReactNode }) {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [hourlyRate, setHourlyRate] = useState(25);
-  const [gracePeriod, setGracePeriod] = useState(10);
+  const [reservationGraceMinutes, setReservationGraceMinutes] = useState(10);
   const [billingMethod, setBillingMethod] = useState<"exact" | "rounded">("exact");
+  const [reservationServiceOnline, setReservationServiceOnline] = useState(false);
+  const sharedReservationsRef = useRef<SharedReservation[]>([]);
 
-  // Periodic grace period expiration check
+  // Reservation state is shared through the Neon API; sensor readings remain
+  // authoritative for whether a car is physically occupying a mapped slot.
   useEffect(() => {
-    const interval = setInterval(() => {
-      setSlots((prevSlots) => {
-        const now = new Date();
-        return prevSlots.map((slot) => {
-          if (slot.status === "occupied" && slot.expectedExitTime && now > slot.expectedExitTime) {
-            return { ...slot, status: "available" as SlotStatus, vehicleNumber: undefined, entryTime: undefined, expectedExitTime: undefined, estimatedDuration: undefined };
-          }
-          if (slot.status === "reserved" && slot.arrivalTime) {
-            const graceEnd = new Date(slot.arrivalTime.getTime() + gracePeriod * 60000);
-            if (now > graceEnd) {
-              return { ...slot, status: "available" as SlotStatus, vehicleNumber: undefined, entryTime: undefined, expectedExitTime: undefined, estimatedDuration: undefined, arrivalTime: undefined, advancePaid: undefined, reservedBy: undefined };
-            }
-          }
-          return slot;
-        });
-      });
-    }, 1000);
+    let disposed = false;
+    let pollTimer: ReturnType<typeof setTimeout>;
 
-    return () => clearInterval(interval);
-  }, [gracePeriod]);
-
-  // Real-time Hardware Telemetry Integration with ThingsBoard.
-  // Maps ThingsBoard telemetry keys to dashboard slots — add an entry here
-  // for each new sensor (e.g. { key: "occupied3", slotNumber: "A03" }).
-  const SENSOR_TO_SLOT = [
-    { key: "occupied", slotNumber: "A01" },
-    { key: "occupied2", slotNumber: "A02" },
-    { key: "occupied3", slotNumber: "A03" },
-  ];
-
-  useEffect(() => {
-    const fetchHardwareStatus = async () => {
+    const refreshReservations = async () => {
       try {
-        const keys = SENSOR_TO_SLOT.map((s) => s.key).join(",");
-        const url = `${THINGSBOARD_HOST}/api/plugins/telemetry/DEVICE/${THINGSBOARD_DEVICE_ID}/values/timeseries?keys=${keys}`;
-        console.log("[SmartPark] Fetching URL:", url);
-        console.log("[SmartPark] API key loaded?", THINGSBOARD_API_KEY ? `yes, length ${THINGSBOARD_API_KEY.length}` : "NO — empty/undefined!");
-
-        const response = await fetch(url, {
-          headers: { "X-Authorization": `ApiKey ${THINGSBOARD_API_KEY}` },
-        });
-
-        console.log("[SmartPark] Telemetry fetch status:", response.status, "— actual response.url:", response.url);
-
-        if (!response.ok) {
-          console.error("[SmartPark] Telemetry fetch not OK:", response.status, "— check THINGSBOARD_API_KEY is valid and not expired/revoked");
-          return;
-        }
-
-        const data = await response.json();
-        console.log("[SmartPark] Raw telemetry response:", JSON.stringify(data));
-
-        // Synchronize hardware telemetry state with each mapped slot
-        setSlots((prevSlots) => {
-          const updated = prevSlots.map((slot) => {
-            const mapping = SENSOR_TO_SLOT.find((s) => s.slotNumber === slot.slotNumber);
-            if (!mapping) return slot;
-
-            const rawValue = data[mapping.key]?.[0]?.value;
-            const isOccupied = rawValue === "true" || rawValue === true;
-
-            if (slot.status === "reserved" && !isOccupied) return slot;
-
-            const now = new Date();
-            return {
-              ...slot,
-              status: isOccupied ? ("occupied" as SlotStatus) : ("available" as SlotStatus),
-              entryTime: isOccupied ? slot.entryTime || now : undefined,
-              vehicleNumber: isOccupied ? slot.vehicleNumber || "HARDWARE_VEHICLE" : undefined,
-            };
-          });
-
-          console.log(
-            "[SmartPark] Slot statuses after update:",
-            SENSOR_TO_SLOT.map((s) => `${s.slotNumber}=${updated.find((u) => u.slotNumber === s.slotNumber)?.status}`).join(", ")
-          );
-          return updated;
-        });
+        const response = await getSharedReservations();
+        if (disposed) return;
+        setReservationServiceOnline(true);
+        setReservationGraceMinutes(response.gracePeriodMinutes);
+        const reservations = response.reservations;
+        sharedReservationsRef.current = reservations;
+        setSlots((previousSlots) =>
+          previousSlots.map((slot) => {
+            if (slot.status === "occupied") return slot;
+            const reservation = reservations.find((item) => item.slotNumber === slot.slotNumber);
+            if (reservation) {
+              return {
+                ...slot,
+                status: "reserved",
+                arrivalTime: new Date(reservation.arrivalTime),
+                expectedExitTime: new Date(reservation.expectedExitTime),
+              };
+            }
+            if (slot.status === "reserved") {
+              return {
+                ...slot,
+                status: "available",
+                vehicleNumber: undefined,
+                arrivalTime: undefined,
+                expectedExitTime: undefined,
+                advancePaid: undefined,
+                reservedBy: undefined,
+              };
+            }
+            return slot;
+          })
+        );
       } catch (error) {
-        console.error("[SmartPark] Telemetry fetch threw an error (likely CORS or network):", error);
+        if (!disposed) {
+          setReservationServiceOnline(false);
+          console.error("[SmartPark] Shared reservation refresh failed:", error);
+        }
+      } finally {
+        if (!disposed) {
+          pollTimer = setTimeout(refreshReservations, 2000);
+        }
       }
     };
 
-    const interval = setInterval(fetchHardwareStatus, 2000); // Fetch telemetry every 2 seconds
-    return () => clearInterval(interval);
+    void refreshReservations();
+    return () => {
+      disposed = true;
+      clearTimeout(pollTimer);
+    };
   }, []);
 
-  const reserveSlot = (slotId: string, arrivalTime: Date, vehicleNumber: string, durationHours: number, paymentMethod: PaymentMethod): { success: boolean; message: string; booking?: Booking } => {
-    const now = new Date();
-    const diffMinutes = (arrivalTime.getTime() - now.getTime()) / 60000;
+  useEffect(() => {
+    if (!THINGSBOARD_DEVICE_ID || !THINGSBOARD_API_KEY) {
+      console.warn(
+        "[SmartPark] Hardware telemetry is disabled; configure VITE_THINGSBOARD_DEVICE_ID and VITE_THINGSBOARD_API_KEY."
+      );
+      return;
+    }
 
-    if (diffMinutes < 0 || diffMinutes > 15) {
-      return { success: false, message: "Reservation is available only within 15 minutes before your arrival time." };
+    let disposed = false;
+    let pollTimer: ReturnType<typeof setTimeout>;
+    let controller: AbortController | undefined;
+
+    const fetchHardwareStatus = async () => {
+      controller = new AbortController();
+      const requestTimer = setTimeout(
+        () => controller?.abort(),
+        TELEMETRY_REQUEST_TIMEOUT_MS
+      );
+      try {
+        const keys = SENSOR_TO_SLOT.map((s) => s.key).join(",");
+        const url = `${THINGSBOARD_HOST}/api/plugins/telemetry/DEVICE/${THINGSBOARD_DEVICE_ID}/values/timeseries?keys=${keys}`;
+        const response = await fetch(url, {
+          headers: { "X-Authorization": `ApiKey ${THINGSBOARD_API_KEY}` },
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error(`ThingsBoard telemetry request failed with HTTP ${response.status}.`);
+        }
+
+        const data: unknown = await response.json();
+        if (typeof data !== "object" || data === null || Array.isArray(data)) {
+          throw new Error("ThingsBoard returned an invalid telemetry response.");
+        }
+        const telemetry = data as Record<string, unknown>;
+
+        setSlots((prevSlots) => {
+          return prevSlots.map((slot) => {
+            const mapping = SENSOR_TO_SLOT.find((s) => s.slotNumber === slot.slotNumber);
+            if (!mapping) return slot;
+
+            const samples = telemetry[mapping.key];
+            const sample = Array.isArray(samples) ? samples[0] : undefined;
+            if (typeof sample !== "object" || sample === null || !("value" in sample)) {
+              return slot;
+            }
+            const isOccupied = parseOccupancy(sample.value);
+            if (isOccupied === undefined) return slot;
+
+            const reservation = sharedReservationsRef.current.find(
+              (item) => item.slotNumber === slot.slotNumber
+            );
+            if (isOccupied) {
+              return {
+                ...slot,
+                status: "occupied",
+                entryTime: slot.entryTime || new Date(),
+                vehicleNumber: slot.vehicleNumber || "HARDWARE_VEHICLE",
+              };
+            }
+
+            if (reservation) {
+              return {
+                ...slot,
+                status: "reserved",
+                entryTime: undefined,
+                vehicleNumber: undefined,
+                arrivalTime: new Date(reservation.arrivalTime),
+                expectedExitTime: new Date(reservation.expectedExitTime),
+              };
+            }
+
+            return {
+              ...slot,
+              status: "available",
+              entryTime: undefined,
+              vehicleNumber: undefined,
+            };
+          });
+        });
+      } catch (error) {
+        if (!disposed) {
+          console.error("[SmartPark] Hardware telemetry request failed:", error);
+        }
+      } finally {
+        clearTimeout(requestTimer);
+        if (!disposed) {
+          pollTimer = setTimeout(fetchHardwareStatus, TELEMETRY_POLL_INTERVAL_MS);
+        }
+      }
+    };
+
+    void fetchHardwareStatus();
+    return () => {
+      disposed = true;
+      clearTimeout(pollTimer);
+      controller?.abort();
+    };
+  }, []);
+
+  const reserveSlot = async (slotId: string, arrivalTime: Date, vehicleNumber: string, durationHours: number, paymentMethod: PaymentMethod): Promise<{ success: boolean; message: string; booking?: Booking }> => {
+    const now = new Date();
+    if (arrivalTime.getTime() < now.getTime() - 60000) {
+      return { success: false, message: "Please choose a future arrival time." };
     }
 
     const slot = slots.find((s) => s.id === slotId);
@@ -210,10 +303,30 @@ export function ParkingProvider({ children }: { children: ReactNode }) {
     const estimatedAmount = durationHours * hourlyRate;
     const advanceAmount = estimatedAmount * 0.5;
     const remainingAmount = estimatedAmount - advanceAmount;
-    const expectedExitTime = new Date(arrivalTime.getTime() + durationHours * 3600000);
+    let sharedReservation: SharedReservation;
+    try {
+      sharedReservation = await createSharedReservation({
+        slotNumber: slot.slotNumber,
+        vehicleNumber: vehicleNumber.trim(),
+        arrivalTime,
+        durationHours,
+        ownerToken: getReservationOwnerToken(),
+      });
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : "Could not save the shared reservation.",
+      };
+    }
+
+    const expectedExitTime = new Date(sharedReservation.expectedExitTime);
+    sharedReservationsRef.current = [
+      ...sharedReservationsRef.current.filter((item) => item.slotNumber !== slot.slotNumber),
+      sharedReservation,
+    ];
 
     const booking: Booking = {
-      id: `booking-${Date.now()}`,
+      id: sharedReservation.id || `booking-${Date.now()}`,
       slotId,
       slotNumber: slot.slotNumber,
       vehicleNumber,
@@ -227,14 +340,22 @@ export function ParkingProvider({ children }: { children: ReactNode }) {
       status: "reserved",
     };
 
+    setBookings((prev) => [...prev, booking]);
     setSlots((prev) =>
-      prev.map((s) =>
-        s.id === slotId
-          ? { ...s, status: "reserved" as SlotStatus, vehicleNumber, arrivalTime, advancePaid: advanceAmount, expectedExitTime, reservedBy: "current-user" }
-          : s
+      prev.map((currentSlot) =>
+        currentSlot.id === slotId
+          ? {
+              ...currentSlot,
+              status: "reserved",
+              vehicleNumber,
+              arrivalTime,
+              expectedExitTime,
+              advancePaid: advanceAmount,
+              reservedBy: "current-user",
+            }
+          : currentSlot
       )
     );
-    setBookings((prev) => [...prev, booking]);
 
     const payment: Payment = {
       id: `pay-${Date.now()}`,
@@ -281,11 +402,16 @@ export function ParkingProvider({ children }: { children: ReactNode }) {
     return { success: true, message: "Parking started." };
   };
 
-  const completeParking = (bookingId: string, paymentMethod: PaymentMethod): Payment => {
+  const completeParking = async (bookingId: string, paymentMethod: PaymentMethod): Promise<Payment> => {
     const booking = bookings.find((b) => b.id === bookingId);
     if (!booking) {
       throw new Error("Booking not found");
     }
+
+    await cancelSharedReservation(bookingId, getReservationOwnerToken());
+    sharedReservationsRef.current = sharedReservationsRef.current.filter(
+      (item) => item.slotNumber !== booking.slotNumber
+    );
 
     const now = new Date();
     const entryTime = booking.entryTime || booking.arrivalTime;
@@ -328,10 +454,14 @@ export function ParkingProvider({ children }: { children: ReactNode }) {
     return payment;
   };
 
-  const cancelReservation = (bookingId: string) => {
+  const cancelReservation = async (bookingId: string) => {
     const booking = bookings.find((b) => b.id === bookingId);
     if (!booking) return;
 
+    await cancelSharedReservation(bookingId, getReservationOwnerToken());
+    sharedReservationsRef.current = sharedReservationsRef.current.filter(
+      (item) => item.slotNumber !== booking.slotNumber
+    );
     setBookings((prev) => prev.map((b) => (b.id === bookingId ? { ...b, status: "cancelled" as const } : b)));
     setSlots((prev) =>
       prev.map((s) =>
@@ -357,17 +487,17 @@ export function ParkingProvider({ children }: { children: ReactNode }) {
     <ParkingContext.Provider
       value={{
         slots,
+        reservationServiceOnline,
         bookings,
         payments,
         hourlyRate,
-        gracePeriod,
+        reservationGraceMinutes,
         billingMethod,
         reserveSlot,
         startParking,
         completeParking,
         cancelReservation,
         setHourlyRate,
-        setGracePeriod,
         setBillingMethod,
         addSlot,
         removeSlot,
