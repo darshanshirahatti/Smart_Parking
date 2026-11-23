@@ -5,8 +5,9 @@ node_modules/
 /dist/
 /build/
 
-# Environment files
-.env*
+# Local environment files (keep example templates)
+.env
+.env.*
 !.env.example
 *.local
 
@@ -35,6 +36,12 @@ Thumbs.db
 
 # Coverage / testing
 coverage/
+htmlcov/
+.coverage
+.coverage.*
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # Python cache and virtual environments
 __pycache__/
