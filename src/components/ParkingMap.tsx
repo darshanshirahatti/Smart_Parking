@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { Search, Timer, IndianRupee, Clock, CheckCircle2, XCircle } from "lucide-react";
+import { Car, Search, Timer, IndianRupee, Clock, CheckCircle2, XCircle } from "lucide-react";
 
 const DURATION_OPTIONS = [
   { label: "30 minutes", hours: 0.5 },
