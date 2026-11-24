@@ -41,6 +41,7 @@ smart-parking/
 ├── bridge.py
 ├── index.html
 ├── package.json
+├── vercel.json
 ├── requirements.txt
 ├── .env.example
 ├── tailwind.config.js
@@ -53,7 +54,7 @@ smart-parking/
 
 ## Requirements
 
-- Node.js 18.18 or newer
+- Node.js 22.x
 - npm 9 or newer
 - A Neon PostgreSQL database for shared reservations and accounts
 - Python 3.10 or newer (for the optional hardware bridge)
@@ -85,6 +86,12 @@ npm start
 Open [http://localhost:3001](http://localhost:3001). The API checks database connectivity on startup; `/health` reports database readiness. Email/password login works without Twilio. Phone-code login requires the optional Twilio Verify credentials described below.
 
 For frontend development with Vite, install the dependencies above, start the API with `npm run start:api` from the project root, and in a second terminal run `npm run dev` from the project root. Vite serves the frontend at [http://localhost:5173](http://localhost:5173) and proxies API requests to port 3001.
+
+### Vercel Multi-Service Deployment
+
+The root `vercel.json` configures two services in one Vercel project: the Vite frontend (`app`) handles all paths except `/api/*` and `/health`, while the Express backend (`server`) handles `/api/*` and `/health`. The frontend already makes same-origin requests to `/api`, so no service binding or public backend hostname is required. Leave `VITE_RESERVATION_API_URL` unset or blank so those requests use the same-domain `/api` rewrite.
+
+Configure backend secrets and settings as Vercel project environment variables, including `DATABASE_URL`, `SENSOR_EVENT_TOKEN`, and `CORS_ORIGINS`; in production, `CORS_ORIGINS` must include the website origin. Configure any `VITE_` variables needed by the browser app for the `app` service at build time. Never commit secrets or put server-only credentials in `VITE_` variables.
 
 ### ThingsBoard Configuration
 
